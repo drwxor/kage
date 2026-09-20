@@ -7,9 +7,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
+use crate::Options;
 use crate::error::{KageError, Result};
 use crate::graph::{BuildLog, EdgeId, Graph, Plan, StatCache};
-use crate::Options;
 
 #[derive(Debug, Clone)]
 pub struct BuildResult {
@@ -27,9 +27,7 @@ impl Palette {
     fn new(force: Option<bool>) -> Self {
         let on = match force {
             Some(v) => v,
-            None => {
-                std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal()
-            }
+            None => std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal(),
         };
         Self { on }
     }
@@ -139,7 +137,11 @@ pub fn execute(
         if !quiet {
             let _g = print.lock().unwrap();
             let prefix = pal.dim(&format!("[{idx:>width$}/{total}]"));
-            eprintln!("{} {}", prefix, colorize_desc(&pal, &edge.instruction, &label));
+            eprintln!(
+                "{} {}",
+                prefix,
+                colorize_desc(&pal, &edge.instruction, &label)
+            );
         }
         if dry_run {
             return Ok(());
@@ -160,11 +162,7 @@ pub fn execute(
 
         let (code, output) = spawn_shell(&edge.command, &graph.workdir);
         if code != 0 {
-            let mut msg = format!(
-                "FAILED: {}\n{}",
-                edge.command,
-                output
-            );
+            let mut msg = format!("FAILED: {}\n{}", edge.command, output);
             if !msg.ends_with('\n') {
                 msg.push('\n');
             }
@@ -259,10 +257,7 @@ pub fn execute(
                 ))
             );
         } else {
-            eprintln!(
-                "{}",
-                pal.red(&format!("kage: {failed} job(s) failed"))
-            );
+            eprintln!("{}", pal.red(&format!("kage: {failed} job(s) failed")));
         }
     }
     if failed > 0 {
@@ -277,8 +272,21 @@ pub fn execute(
 }
 
 fn spawn_shell(command: &str, workdir: &Path) -> (i32, String) {
-    match Command::new("/bin/sh")
-        .arg("-c")
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut cmd = Command::new("cmd");
+        cmd.arg("/C");
+        cmd
+    };
+
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let mut cmd = Command::new("/bin/sh");
+        cmd.arg("-c");
+        cmd
+    };
+
+    match cmd
         .arg(command)
         .current_dir(workdir)
         .stdin(Stdio::null())
@@ -289,12 +297,15 @@ fn spawn_shell(command: &str, workdir: &Path) -> (i32, String) {
         Ok(o) => {
             let mut s = String::from_utf8_lossy(&o.stdout).into_owned();
             let err = String::from_utf8_lossy(&o.stderr);
+
             if !err.is_empty() {
                 s.push_str(&err);
             }
+
             (o.status.code().unwrap_or(1), s)
         }
-        Err(e) => (1, format!("failed to spawn /bin/sh: {e}\n")),
+
+        Err(e) => (1, format!("failed to spawn shell: {e}\n")),
     }
 }
 
@@ -310,15 +321,10 @@ fn run_parallel<F>(
     pal: &Palette,
     print: &Mutex<()>,
 ) where
-    F: Fn(EdgeId, &Mutex<BuildLog>, &Mutex<StatCache>) -> std::result::Result<(), String>
-        + Sync,
+    F: Fn(EdgeId, &Mutex<BuildLog>, &Mutex<StatCache>) -> std::result::Result<(), String> + Sync,
 {
     let n_edges = graph.edges.len();
-    let wait: Vec<AtomicUsize> = plan
-        .wait
-        .iter()
-        .map(|&w| AtomicUsize::new(w))
-        .collect();
+    let wait: Vec<AtomicUsize> = plan.wait.iter().map(|&w| AtomicUsize::new(w)).collect();
     let dirty_set: Vec<bool> = {
         let mut d = vec![false; n_edges];
         for &e in &plan.dirty {
@@ -481,7 +487,9 @@ pub fn print_compdb(graph: &Graph) {
         let file = json_escape(&file);
         let output = json_escape(&output);
         let dir = json_escape(&dir);
-        print!("  {{\"directory\": \"{dir}\", \"command\": \"{cmd}\", \"file\": \"{file}\", \"output\": \"{output}\"}}");
+        print!(
+            "  {{\"directory\": \"{dir}\", \"command\": \"{cmd}\", \"file\": \"{file}\", \"output\": \"{output}\"}}"
+        );
     }
     println!("\n]");
 }
